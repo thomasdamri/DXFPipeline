@@ -1,0 +1,15 @@
+# Pipeline outputs
+tiles/
+transform.json
+tile_meta.json
+label-manifest.json
+hitboxes.json
+debug_labels.svg
+diagram.svg
+
+# Python
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
