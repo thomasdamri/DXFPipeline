@@ -94,14 +94,11 @@ def minimal_tile_meta():
       → scale_y = 256/100 = 2.56
     """
     return {
-        "max_zoom":           3,
-        "tile_size":          256,
-        "full_width_px":      1024,
-        "full_height_px":     512,
-        "svg_viewbox_width":  200.0,
-        "svg_viewbox_height": 100.0,
-        "px_per_svg_unit":    5.12,
-        "leaflet_bounds":     [[-256.0, 0], [0, 512.0]],
+        "max_zoom":       3,
+        "tile_size":      256,
+        "full_width_px":  1024,
+        "full_height_px": 512,
+        "leaflet_bounds": [[-256.0, 0], [0, 512.0]],
     }
 
 

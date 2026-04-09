@@ -926,23 +926,18 @@ def build_hitboxes(labels: dict) -> list[dict]:
     for key, entry in labels.items():
         if not entry["found"] or entry["coords"] is None:
             continue
-        leaflet = entry["coords"].get("leaflet")
-        bbox    = entry["coords"].get("bbox")
+        leaflet  = entry["coords"].get("leaflet")
+        raw_bbox = entry["coords"].get("bbox")
+        bbox = (
+            {"leaflet": {"corners": raw_bbox["leaflet"]["corners"]}}
+            if raw_bbox and raw_bbox.get("leaflet")
+            else None
+        )
         hitboxes.append({
             "label":   entry["text"],
             "found":   True,
-            "dxf":     entry["coords"]["dxf"],
             "leaflet": leaflet,
-            "bbox":    bbox,      # {dxf, png, leaflet} tight bounding boxes
-            "meta": {
-                "layer":       entry["dxf"]["layer"],
-                "type":        entry["dxf"]["type"],
-                "handle":      entry["dxf"]["handle"],
-                "duplicate":   entry["duplicate"],
-                "fuzzy_match": entry["fuzzy_match"],
-                "clustered":   entry.get("clustered", False),
-                "cluster_parts": entry.get("cluster_parts", []),
-            },
+            "bbox":    bbox,
         })
     return hitboxes
 

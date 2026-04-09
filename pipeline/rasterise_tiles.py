@@ -237,8 +237,6 @@ def main():
     print(f"Tiling into  : {tiles_dir}/")
     _generate_tiles(full_img, tiles_dir, max_zoom, full_w_px, full_h_px, tile_sz)
 
-    px_per_svg_unit = full_w_px / vb_w
-
     # Coordinate space: normalise by shorter pixel dimension so the shorter axis
     # spans exactly tile_sz CRS.Simple units at zoom 0.
     short_px  = min(full_w_px, full_h_px)
@@ -246,14 +244,11 @@ def main():
     leaflet_h = round(full_h_px * tile_sz / short_px, 4)
 
     tile_meta = {
-        "max_zoom":           max_zoom,
-        "tile_size":          tile_sz,
-        "full_width_px":      full_w_px,
-        "full_height_px":     full_h_px,
-        "svg_viewbox_width":  vb_w,
-        "svg_viewbox_height": vb_h,
-        "px_per_svg_unit":    round(px_per_svg_unit, 6),
-        "leaflet_bounds":     [[-leaflet_h, 0], [0, leaflet_w]],
+        "max_zoom":       max_zoom,
+        "tile_size":      tile_sz,
+        "full_width_px":  full_w_px,
+        "full_height_px": full_h_px,
+        "leaflet_bounds": [[-leaflet_h, 0], [0, leaflet_w]],
     }
 
     with open(args.tile_meta, "w") as f:

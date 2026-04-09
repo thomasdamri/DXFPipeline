@@ -477,12 +477,9 @@ class TestBuildHitboxes:
 
     def test_hitbox_shape_has_required_keys(self):
         hb = build_hitboxes(_found_labels_dict())[0]
-        for key in ("label", "found", "dxf", "leaflet", "bbox", "meta"):
+        for key in ("label", "found", "leaflet", "bbox"):
             assert key in hb, f"Missing hitbox key: {key}"
 
-    def test_meta_subkeys(self):
+    def test_hitbox_shape_has_no_extra_keys(self):
         hb = build_hitboxes(_found_labels_dict())[0]
-        meta = hb["meta"]
-        for key in ("layer", "type", "handle", "duplicate", "fuzzy_match",
-                    "clustered", "cluster_parts"):
-            assert key in meta, f"Missing meta key: {key}"
+        assert set(hb.keys()) == {"label", "found", "leaflet", "bbox"}

@@ -22,8 +22,7 @@ import rasterise_tiles  # noqa: E402
 
 PIPELINE_DIR   = Path(__file__).parent.parent / "pipeline"
 REQUIRED_META_KEYS = {
-    "max_zoom", "tile_size", "full_width_px", "full_height_px",
-    "svg_viewbox_width", "svg_viewbox_height", "px_per_svg_unit", "leaflet_bounds",
+    "max_zoom", "tile_size", "full_width_px", "full_height_px", "leaflet_bounds",
 }
 
 
