@@ -3,9 +3,10 @@ rasterise_tiles.py
 ──────────────────
 Converts a DXF-derived SVG → high-res PNG → XYZ tile pyramid for Leaflet.
 
-Reads  : drawing.svg
-Writes : tiles/{z}/{x}/{y}.png
-         tile_meta.json      ← loaded by DXFViewer.tsx
+Reads  : drawing.svg  (or drawing_<theme>.svg)
+Writes : tiles/{z}/{x}/{y}.png              (no --theme)
+         tiles/<theme>/{z}/{x}/{y}.png      (with --theme)
+         tile_meta.json                     ← loaded by DXFViewer.tsx
 
 Rasteriser: Inkscape CLI
     Install : https://inkscape.org/release/
@@ -18,6 +19,7 @@ Requirements (tiling only):
 
 Usage:
     python rasterise_tiles.py --svg drawing.svg
+    python rasterise_tiles.py --svg drawing_dark.svg --theme dark --bg-color "#1A1A2E"
     python rasterise_tiles.py --svg drawing.svg --max-zoom 6
     python rasterise_tiles.py --svg drawing.svg \\
         --inkscape "C:\\Program Files\\Inkscape\\bin\\inkscape.exe"
@@ -38,6 +40,14 @@ from pathlib import Path
 
 TILE_SIZE         = 256
 MIN_FULL_WIDTH_PX = 4096
+
+
+# ── Colour helpers ────────────────────────────────────────────────────────────
+
+def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
+    """Convert '#RRGGBB' (or 'RRGGBB') to an (R, G, B) int tuple."""
+    h = hex_str.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
 # ── Inkscape ──────────────────────────────────────────────────────────────────
@@ -74,13 +84,14 @@ def _check_inkscape_version(exe: str):
         print(f"  Inkscape     : {exe}  (version check failed: {exc})")
 
 
-def _rasterise_inkscape(svg_path: str, out_png: str, width_px: int, exe: str):
+def _rasterise_inkscape(svg_path: str, out_png: str, width_px: int, exe: str,
+                        bg_color: str = "#ffffff"):
     cmd = [
         exe,
         os.path.abspath(svg_path),
         f"--export-filename={os.path.abspath(out_png)}",
         f"--export-width={width_px}",
-        "--export-background=white",
+        f"--export-background={bg_color}",
         "--export-background-opacity=1",
     ]
     print(f"  Running      : {' '.join(cmd)}")
@@ -125,7 +136,8 @@ def _auto_max_zoom(vb_w: float) -> int:
 
 
 def _generate_tiles(img, out_dir: Path, max_zoom: int,
-                    full_w: int, full_h: int, tile_sz: int):
+                    full_w: int, full_h: int, tile_sz: int,
+                    bg_rgb: tuple[int, int, int] = (255, 255, 255)):
     from PIL import Image
 
     # Normalise by the shorter dimension so that axis spans exactly tile_sz
@@ -148,7 +160,7 @@ def _generate_tiles(img, out_dir: Path, max_zoom: int,
 
         scaled = img.resize((target_w, target_h), Image.LANCZOS)
 
-        canvas = Image.new("RGB", (cols * tile_sz, rows * tile_sz), (255, 255, 255))
+        canvas = Image.new("RGB", (cols * tile_sz, rows * tile_sz), bg_rgb)
         if scaled.mode == "RGBA":
             canvas.paste(scaled, (0, 0), mask=scaled.split()[3])
         else:
@@ -184,6 +196,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tiles-dir", default="tiles",          metavar="DIR")
     p.add_argument("--tile-meta", default="tile_meta.json", metavar="FILE")
     p.add_argument("--tile-size", type=int, default=TILE_SIZE, metavar="PX")
+    p.add_argument("--theme",     default=None,  metavar="NAME",
+                   help="Theme name (e.g. 'dark', 'light'). When given, tiles "
+                        "are written to <tiles-dir>/<theme>/")
+    p.add_argument("--bg-color",  default="#ffffff", metavar="HEX",
+                   help="Background colour as hex (default: #ffffff). Sets the "
+                        "Inkscape export background and the tile canvas fill.")
     return p.parse_args()
 
 
@@ -198,6 +216,9 @@ def main():
     inkscape = _find_inkscape(args.inkscape)
     _check_inkscape_version(inkscape)
 
+    bg_color = args.bg_color or "#ffffff"
+    bg_rgb   = _hex_to_rgb(bg_color)
+
     vb_w, vb_h = _read_svg_viewbox(args.svg)
 
     max_zoom    = args.max_zoom or _auto_max_zoom(vb_w)
@@ -208,13 +229,17 @@ def main():
     print(f"Max zoom     : {max_zoom}  "
           f"(grid {2**max_zoom}x{2**max_zoom}, "
           f"target {target_w_px} x {target_h_px} px)")
+    if args.theme:
+        print(f"Theme        : {args.theme}")
+    print(f"Background   : {bg_color}  {bg_rgb}")
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
         tmp_png = tmp.name
 
     try:
         print(f"Rasterising  : {args.svg} -> {target_w_px}px wide ...")
-        _rasterise_inkscape(args.svg, tmp_png, target_w_px, inkscape)
+        _rasterise_inkscape(args.svg, tmp_png, target_w_px, inkscape,
+                            bg_color=bg_color)
 
         from PIL import Image
         full_img = Image.open(tmp_png)
@@ -232,10 +257,14 @@ def main():
     full_w_px = actual_w
     full_h_px = actual_h
 
+    # When --theme is given, nest tiles under a subdirectory
     tiles_dir = Path(args.tiles_dir)
+    if args.theme:
+        tiles_dir = tiles_dir / args.theme
     tiles_dir.mkdir(parents=True, exist_ok=True)
     print(f"Tiling into  : {tiles_dir}/")
-    _generate_tiles(full_img, tiles_dir, max_zoom, full_w_px, full_h_px, tile_sz)
+    _generate_tiles(full_img, tiles_dir, max_zoom, full_w_px, full_h_px,
+                    tile_sz, bg_rgb=bg_rgb)
 
     # Coordinate space: normalise by shorter pixel dimension so the shorter axis
     # spans exactly tile_sz CRS.Simple units at zoom 0.
@@ -251,6 +280,9 @@ def main():
         "leaflet_bounds": [[-leaflet_h, 0], [0, leaflet_w]],
     }
 
+    # Ensure tile_meta parent directory exists (it lives inside tiles_dir for
+    # themed runs when run_pipeline.py passes --tile-meta tiles/<theme>/tile_meta.json)
+    Path(args.tile_meta).parent.mkdir(parents=True, exist_ok=True)
     with open(args.tile_meta, "w") as f:
         json.dump(tile_meta, f, indent=2)
     print(f"\nTile meta    : {args.tile_meta}")

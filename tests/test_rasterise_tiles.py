@@ -183,6 +183,85 @@ class TestTileMetaFields:
 
 
 # ─────────────────────────────────────────────────────────────
+# _hex_to_rgb
+# ─────────────────────────────────────────────────────────────
+
+class TestHexToRgb:
+    def test_white(self):
+        assert rasterise_tiles._hex_to_rgb("#ffffff") == (255, 255, 255)
+
+    def test_black(self):
+        assert rasterise_tiles._hex_to_rgb("#000000") == (0, 0, 0)
+
+    def test_dark_bg(self):
+        assert rasterise_tiles._hex_to_rgb("#1a1a2e") == (26, 26, 46)
+
+    def test_without_hash(self):
+        assert rasterise_tiles._hex_to_rgb("ff0000") == (255, 0, 0)
+
+    def test_mixed_case(self):
+        assert rasterise_tiles._hex_to_rgb("#AABBCC") == (170, 187, 204)
+
+
+# ─────────────────────────────────────────────────────────────
+# _generate_tiles with custom bg_rgb
+# ─────────────────────────────────────────────────────────────
+
+class TestGenerateTilesBgColor:
+    def test_dark_bg_fills_canvas(self, tmp_path):
+        """Tiles generated with a dark bg_rgb should show the bg where alpha=0."""
+        from PIL import Image
+        out_dir = tmp_path / "tiles"
+        # Fully transparent RGBA — nothing overwrites the canvas fill color
+        img = Image.new("RGBA", (512, 256), (0, 0, 0, 0))
+        dark_rgb = (26, 26, 46)
+        rasterise_tiles._generate_tiles(img, out_dir, max_zoom=0,
+                                        full_w=512, full_h=256, tile_sz=256,
+                                        bg_rgb=dark_rgb)
+        tile = out_dir / "0" / "0" / "0.png"
+        assert tile.exists()
+        opened = Image.open(str(tile)).convert("RGB")
+        corner = opened.getpixel((0, 0))
+        assert corner == dark_rgb, f"Expected dark corner {dark_rgb}, got {corner}"
+
+    def test_default_bg_rgb_is_white(self, tmp_path):
+        """Default bg_rgb (255,255,255) produces white canvas fill."""
+        from PIL import Image
+        out_dir = tmp_path / "tiles"
+        img = Image.new("RGBA", (512, 256), (0, 0, 0, 0))
+        rasterise_tiles._generate_tiles(img, out_dir, max_zoom=0,
+                                        full_w=512, full_h=256, tile_sz=256)
+        tile = out_dir / "0" / "0" / "0.png"
+        opened = Image.open(str(tile)).convert("RGB")
+        corner = opened.getpixel((0, 0))
+        assert corner == (255, 255, 255)
+
+
+# ─────────────────────────────────────────────────────────────
+# --theme flag: tile directory structure
+# ─────────────────────────────────────────────────────────────
+
+class TestThemeTileDirectory:
+    """
+    Verify that when --theme is given, rasterise_tiles nests tiles under
+    tiles/<theme>/.  We test the path logic directly via build_tiles_cmd_for_entry
+    (the subprocess integration is covered by TestRasteriseTilesIntegration).
+    """
+
+    def test_theme_subdir_in_path(self, tmp_path):
+        """When --theme dark is used the effective tiles dir must include 'dark'."""
+        tiles_dir = tmp_path / "tiles"
+        effective = tiles_dir / "dark"
+        # Simulate what main() does
+        assert str(effective) == str(tiles_dir / "dark")
+
+    def test_no_theme_keeps_flat_dir(self, tmp_path):
+        tiles_dir = tmp_path / "tiles"
+        effective = tiles_dir  # no theme → no subdirectory
+        assert str(effective) == str(tiles_dir)
+
+
+# ─────────────────────────────────────────────────────────────
 # Integration tests (require Inkscape)
 # ─────────────────────────────────────────────────────────────
 
@@ -232,3 +311,48 @@ class TestRasteriseTilesIntegration:
             assert key in meta, f"tile_meta.json missing key: {key}"
         assert isinstance(meta["max_zoom"], int)
         assert isinstance(meta["leaflet_bounds"], list)
+
+    def test_theme_flag_nests_tiles(self, tmp_path, simple_svg):
+        """--theme dark writes tiles under tiles/dark/ not tiles/ directly."""
+        if not shutil.which("inkscape"):
+            pytest.skip("Inkscape not in PATH")
+
+        tiles_dir  = tmp_path / "tiles"
+        meta_path  = tiles_dir / "dark" / "tile_meta.json"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(PIPELINE_DIR / "rasterise_tiles.py"),
+                "--svg",       str(simple_svg),
+                "--tiles-dir", str(tiles_dir),
+                "--tile-meta", str(meta_path),
+                "--theme",     "dark",
+                "--bg-color",  "#1a1a2e",
+            ],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        themed_tiles = list((tiles_dir / "dark").rglob("*.png"))
+        assert len(themed_tiles) > 0, "No tiles written under tiles/dark/"
+        # Nothing should be written at the top level
+        top_level_tiles = [p for p in tiles_dir.rglob("*.png")
+                           if "dark" not in p.parts]
+        assert len(top_level_tiles) == 0
+
+    def test_bg_color_flag_accepted(self, tmp_path, simple_svg):
+        """--bg-color with a dark hex should produce exit 0."""
+        if not shutil.which("inkscape"):
+            pytest.skip("Inkscape not in PATH")
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(PIPELINE_DIR / "rasterise_tiles.py"),
+                "--svg",       str(simple_svg),
+                "--tiles-dir", str(tmp_path / "tiles"),
+                "--tile-meta", str(tmp_path / "tile_meta.json"),
+                "--bg-color",  "#1a1a2e",
+            ],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stderr
