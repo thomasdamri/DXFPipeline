@@ -8,35 +8,30 @@ Writes : tiles/{z}/{x}/{y}.png              (no --theme)
          tiles/<theme>/{z}/{x}/{y}.png      (with --theme)
          tile_meta.json                     ← loaded by DXFViewer.tsx
 
-Rasteriser: Inkscape CLI
-    Install : https://inkscape.org/release/
-    Windows : add to PATH, or pass --inkscape "C:\\Program Files\\Inkscape\\bin\\inkscape.exe"
-    Linux   : sudo apt install inkscape  /  sudo dnf install inkscape
-    macOS   : brew install inkscape
+Rasteriser: cairosvg (pure-Python, no external binary)
+    conda install -c conda-forge cairosvg
 
 Requirements (tiling only):
-    pip install pillow
+    conda install -c conda-forge pillow
 
 Usage:
     python rasterise_tiles.py --svg drawing.svg
     python rasterise_tiles.py --svg drawing_dark.svg --theme dark --bg-color "#1A1A2E"
     python rasterise_tiles.py --svg drawing.svg --max-zoom 6
-    python rasterise_tiles.py --svg drawing.svg \\
-        --inkscape "C:\\Program Files\\Inkscape\\bin\\inkscape.exe"
 """
 
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import logging
 import math
-import os
 import re
-import shutil
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 TILE_SIZE         = 256
 MIN_FULL_WIDTH_PX = 4096
@@ -48,63 +43,6 @@ def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
     """Convert '#RRGGBB' (or 'RRGGBB') to an (R, G, B) int tuple."""
     h = hex_str.lstrip("#")
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
-
-
-# ── Inkscape ──────────────────────────────────────────────────────────────────
-
-def _find_inkscape(hint: str | None) -> str:
-    candidates = []
-    if hint:
-        candidates.append(hint)
-    candidates.append(shutil.which("inkscape") or "")
-    candidates += [
-        r"C:\Program Files\Inkscape\bin\inkscape.exe",
-        r"C:\Program Files (x86)\Inkscape\bin\inkscape.exe",
-    ]
-    for c in candidates:
-        if c and Path(c).is_file():
-            return c
-    sys.exit(
-        "\nERROR: Inkscape not found.\n\n"
-        "  Install from : https://inkscape.org/release/\n"
-        "  Then either  : add Inkscape\\bin to your PATH\n"
-        "      or pass  : --inkscape \"C:\\Program Files\\Inkscape\\bin\\inkscape.exe\"\n"
-    )
-
-
-def _check_inkscape_version(exe: str):
-    try:
-        result = subprocess.run(
-            [exe, "--version"],
-            capture_output=True, text=True, timeout=10,
-        )
-        line = (result.stdout or result.stderr or "").splitlines()[0]
-        print(f"  Inkscape     : {line.strip()}")
-    except Exception as exc:
-        print(f"  Inkscape     : {exe}  (version check failed: {exc})")
-
-
-def _rasterise_inkscape(svg_path: str, out_png: str, width_px: int, exe: str,
-                        bg_color: str = "#ffffff"):
-    cmd = [
-        exe,
-        os.path.abspath(svg_path),
-        f"--export-filename={os.path.abspath(out_png)}",
-        f"--export-width={width_px}",
-        f"--export-background={bg_color}",
-        "--export-background-opacity=1",
-    ]
-    print(f"  Running      : {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print("\n-- Inkscape stdout --", file=sys.stderr)
-        print(result.stdout,            file=sys.stderr)
-        print("-- Inkscape stderr --",  file=sys.stderr)
-        print(result.stderr,            file=sys.stderr)
-        sys.exit(f"\nInkscape exited with code {result.returncode}")
-    for line in (result.stderr or "").splitlines():
-        if line.strip():
-            print(f"  [inkscape] {line}")
 
 
 # ── SVG viewBox reader ────────────────────────────────────────────────────────
@@ -177,19 +115,17 @@ def _generate_tiles(img, out_dir: Path, max_zoom: int,
                 written += 1
 
         pct = 100 * written / total_tiles
-        print(f"  z={z}  {cols:>3}x{rows:<3} tiles  [{written}/{total_tiles}  {pct:.0f}%]")
+        logger.debug("z=%d  %3dx%-3d tiles  [%d/%d  %.0f%%]", z, cols, rows, written, total_tiles, pct)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Rasterise DXF SVG to PNG tile pyramid using Inkscape."
+        description="Rasterise DXF SVG to PNG tile pyramid using cairosvg."
     )
     p.add_argument("--svg",       required=True, metavar="FILE",
                    help="SVG from render_svg.py")
-    p.add_argument("--inkscape",  default=None,  metavar="EXE",
-                   help="Path to inkscape executable (default: auto-detect)")
     p.add_argument("--max-zoom",  type=int, default=None, metavar="N",
                    help=f"Max tile zoom level (default: auto so drawing is "
                         f">={MIN_FULL_WIDTH_PX}px wide)")
@@ -201,20 +137,26 @@ def parse_args() -> argparse.Namespace:
                         "are written to <tiles-dir>/<theme>/")
     p.add_argument("--bg-color",  default="#ffffff", metavar="HEX",
                    help="Background colour as hex (default: #ffffff). Sets the "
-                        "Inkscape export background and the tile canvas fill.")
+                        "cairosvg render background and the tile canvas fill.")
     return p.parse_args()
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(message)s",
+    )
+    try:
+        import cairosvg
+    except ImportError:
+        sys.exit("cairosvg not installed.  Run:  conda install -c conda-forge cairosvg")
     try:
         from PIL import Image  # noqa: F401
     except ImportError:
-        sys.exit("Pillow not installed.  Run:  pip install pillow")
+        sys.exit("Pillow not installed.  Run:  conda install -c conda-forge pillow")
 
-    args     = parse_args()
-    tile_sz  = args.tile_size
-    inkscape = _find_inkscape(args.inkscape)
-    _check_inkscape_version(inkscape)
+    args    = parse_args()
+    tile_sz = args.tile_size
 
     bg_color = args.bg_color or "#ffffff"
     bg_rgb   = _hex_to_rgb(bg_color)
@@ -225,34 +167,25 @@ def main():
     target_w_px = 2 ** max_zoom * tile_sz
     target_h_px = round(vb_h * (target_w_px / vb_w))
 
-    print(f"SVG viewBox  : {vb_w:.2f} x {vb_h:.2f} mm")
-    print(f"Max zoom     : {max_zoom}  "
-          f"(grid {2**max_zoom}x{2**max_zoom}, "
-          f"target {target_w_px} x {target_h_px} px)")
+    logger.info("SVG viewBox  : %.2f x %.2f mm", vb_w, vb_h)
+    logger.info("Max zoom     : %d  (grid %dx%d, target %d x %d px)",
+                max_zoom, 2**max_zoom, 2**max_zoom, target_w_px, target_h_px)
     if args.theme:
-        print(f"Theme        : {args.theme}")
-    print(f"Background   : {bg_color}  {bg_rgb}")
+        logger.info("Theme        : %s", args.theme)
+    logger.info("Background   : %s  %s", bg_color, bg_rgb)
 
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp_png = tmp.name
+    logger.info("Rasterising  : %s -> %dpx wide ...", args.svg, target_w_px)
+    png_bytes = cairosvg.svg2png(
+        url=str(Path(args.svg).resolve()),
+        output_width=target_w_px,
+        output_height=target_h_px,
+    )
 
-    try:
-        print(f"Rasterising  : {args.svg} -> {target_w_px}px wide ...")
-        _rasterise_inkscape(args.svg, tmp_png, target_w_px, inkscape,
-                            bg_color=bg_color)
-
-        from PIL import Image
-        full_img = Image.open(tmp_png)
-        full_img.load()
-        full_img = full_img.convert("RGBA")
-    finally:
-        try:
-            os.unlink(tmp_png)
-        except OSError:
-            pass
+    from PIL import Image
+    full_img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
 
     actual_w, actual_h = full_img.size
-    print(f"Rendered     : {actual_w} x {actual_h} px")
+    logger.info("Rendered     : %d x %d px", actual_w, actual_h)
 
     full_w_px = actual_w
     full_h_px = actual_h
@@ -262,7 +195,7 @@ def main():
     if args.theme:
         tiles_dir = tiles_dir / args.theme
     tiles_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Tiling into  : {tiles_dir}/")
+    logger.info("Tiling into  : %s/", tiles_dir)
     _generate_tiles(full_img, tiles_dir, max_zoom, full_w_px, full_h_px,
                     tile_sz, bg_rgb=bg_rgb)
 
@@ -285,30 +218,15 @@ def main():
     Path(args.tile_meta).parent.mkdir(parents=True, exist_ok=True)
     with open(args.tile_meta, "w") as f:
         json.dump(tile_meta, f, indent=2)
-    print(f"\nTile meta    : {args.tile_meta}")
+    logger.info("Tile meta    : %s", args.tile_meta)
 
     total_tiles = sum(
         max(1, math.ceil(full_w_px * (2 ** z) / short_px)) *
         max(1, math.ceil(full_h_px * (2 ** z) / short_px))
         for z in range(max_zoom + 1)
     )
-    print()
-    print("-- Summary ---------------------------------------------------")
-    print(f"  Drawing     : {full_w_px} x {full_h_px} px")
-    print(f"  Zoom levels : 0 - {max_zoom}")
-    print(f"  Total tiles : {total_tiles}")
-    print(f"  Tile dir    : {tiles_dir}/")
-    print(f"  tile_meta   : {args.tile_meta}")
-    print()
-    print("-- Next step -------------------------------------------------")
-    print("  python extract_manifest.py \\")
-    print("    --dxf drawing.dxf \\")
-    print("    --labels labels.txt \\")
-    print(f"    --tile-meta {args.tile_meta} \\")
-    print("    --hitboxes hitboxes.json")
-    print()
-    print("  Serve tiles:  python -m http.server 8765")
-    print("  Then load tile_meta.json + hitboxes.json in DXFViewer")
+    logger.info("Drawing: %d x %d px  |  zoom 0-%d  |  %d tiles  |  %s/",
+                full_w_px, full_h_px, max_zoom, total_tiles, tiles_dir)
 
 
 if __name__ == "__main__":

@@ -6,8 +6,8 @@ ready for the P&ID Leaflet viewer.
 ## Quick start
 
 ```bash
-pip install -r requirements.txt          # ezdxf, Pillow, lxml
-# also install Inkscape: https://inkscape.org/release/
+conda env create -f environment.yml
+conda activate dxfpipeline
 
 python pipeline/run_pipeline.py \
   --dxf input.dxf \
@@ -22,17 +22,16 @@ Outputs written to `output/`:
 | `tiles/{z}/{x}/{y}.png` | XYZ tile pyramid for Leaflet |
 | `hitboxes.json` | Clickable label hitboxes (Leaflet coords) |
 | `tile_meta.json` | Viewer bootstrap — zoom levels, bounds |
-| `label-manifest.json` | Full label data |
+| `label-manifest.json` | Full label data (opt-in via `--manifest` on Stage 3) |
 
 ## Options
 
 ```text
 --out-dir DIR          Output directory (default: output/)
 --max-zoom N           Override max tile zoom level (auto-calculated if omitted)
---inkscape PATH        Path to Inkscape binary (auto-detected if on PATH)
+--themes-config FILE   JSON file with per-theme background + layer colours
 --keep-work            Retain intermediate files (.work/) after success
 --from-stage STAGE     Resume from svg / tiles / manifest (requires prior --keep-work run)
---debug-svg FILE       Write SVG with hitbox overlays for inspection
 --verbose              Verbose label matching output
 ```
 
@@ -56,26 +55,22 @@ The three underlying scripts can still be called directly if needed:
 # Stage 1: DXF -> SVG
 python pipeline/render_svg.py input.dxf drawing.svg
 
-# Stage 2: SVG -> tile pyramid
-python pipeline/rasterise_tiles.py --svg drawing.svg --transform transform.json
+# Stage 2: SVG -> tile pyramid + tile_meta.json
+python pipeline/rasterise_tiles.py --svg drawing.svg
 
-# Stage 3: label extraction
+# Stage 3: label extraction -> hitboxes.json
 python pipeline/extract_manifest.py \
   --dxf input.dxf \
   --labels labels.txt \
-  --svg drawing.svg \
-  --transform transform.json \
-  --out label-manifest.json
+  --tile-meta tile_meta.json \
+  --hitboxes hitboxes.json
 ```
 
 ## Tests
 
 ```bash
-# Unit tests (no Inkscape required)
-python -m pytest tests/ -m "not integration" -v
-
-# Integration tests (require Inkscape in PATH)
-python -m pytest tests/ -m integration -v
+# All tests (no external dependencies required)
+python -m pytest tests/ -v
 
 # Generate test DXF data
 python tests/generate_test_dxf.py

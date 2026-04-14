@@ -197,16 +197,15 @@ class TestCommandBuilders:
         assert "--bg-color" in cmd
         assert "#1a1a2e" in cmd
 
-    def test_tiles_cmd_max_zoom_and_inkscape(self, tmp_path):
-        args = _make_args(tmp_path, max_zoom=5, inkscape="/usr/bin/inkscape")
+    def test_tiles_cmd_max_zoom(self, tmp_path):
+        args = _make_args(tmp_path, max_zoom=5)
         work_dir = tmp_path / ".work"
         out_dir = tmp_path / "output"
         entry = {"theme": None, "svg": "drawing.svg", "background": "#ffffff"}
         cmd = run_pipeline.build_tiles_cmd_for_entry(args, work_dir, out_dir, entry)
         assert "--max-zoom" in cmd
         assert "5" in cmd
-        assert "--inkscape" in cmd
-        assert "/usr/bin/inkscape" in cmd
+        assert "--inkscape" not in cmd
 
     def test_manifest_cmd_basic(self, tmp_path):
         args = _make_args(tmp_path)
@@ -413,19 +412,20 @@ class TestOrchestrationLoop:
         # Stage 1 + first Stage 2 (fail) = 2; third Stage 2 and Stage 3 never run
         assert mock_run.call_count == 2
 
-    def test_timing_printed_per_stage(self, tmp_path, capsys):
+    def test_timing_logged_per_stage(self, tmp_path, caplog):
+        import logging
         args = self._args(tmp_path)
         self._seed(args)
         mock_result = MagicMock()
         mock_result.returncode = 0
 
         with patch("subprocess.run", return_value=mock_result):
-            run_pipeline.run(args)
+            with caplog.at_level(logging.INFO, logger="run_pipeline"):
+                run_pipeline.run(args)
 
-        out = capsys.readouterr().out
-        assert "render_svg" in out
-        assert "rasterise_tiles" in out
-        assert "extract_manifest" in out
+        assert "render_svg" in caplog.text
+        assert "rasterise_tiles" in caplog.text
+        assert "extract_manifest" in caplog.text
 
     def test_from_stage_skips_earlier_stages(self, tmp_path):
         args = self._args(tmp_path)

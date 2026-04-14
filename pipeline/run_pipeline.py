@@ -22,14 +22,19 @@ Exit codes:
     2  argument error
 """
 
+from __future__ import annotations
+
 import argparse
 import json
+import logging
 import os
 import shutil      # used by run() — work dir cleanup
 import subprocess  # used by run() — stage execution
 import sys         # used by run() — exit codes
 import time        # used by run() — stage timing
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 HERE = Path(__file__).parent
 
@@ -46,8 +51,6 @@ def parse_args(argv=None):
                    help="Output directory (default: output/)")
     p.add_argument("--max-zoom", type=int, default=None, metavar="N",
                    help="Maximum tile zoom level (passed to rasterise_tiles.py)")
-    p.add_argument("--inkscape", default=None, metavar="PATH",
-                   help="Path to Inkscape executable (auto-detected if omitted)")
     p.add_argument("--themes-config", default=None, type=Path, metavar="FILE",
                    help="JSON file with per-theme background + layer colours. "
                         "When provided, one tile set is generated per theme "
@@ -121,8 +124,6 @@ def build_tiles_cmd_for_entry(args, work_dir: Path, out_dir: Path,
         cmd += ["--theme", theme]
     if args.max_zoom is not None:
         cmd += ["--max-zoom", str(args.max_zoom)]
-    if args.inkscape:
-        cmd += ["--inkscape", str(args.inkscape)]
     return cmd
 
 
@@ -173,7 +174,7 @@ def check_prerequisites(from_stage: str, work_dir: Path, out_dir: Path) -> None:
                         svg = work_dir / svg
                     if not svg.exists():
                         missing.append(str(svg))
-            except Exception:
+            except (OSError, json.JSONDecodeError):
                 missing.append(f"{manifest_file} (unreadable)")
 
     elif from_stage == "manifest":
@@ -188,10 +189,10 @@ def check_prerequisites(from_stage: str, work_dir: Path, out_dir: Path) -> None:
 
     if missing:
         files = "\n  ".join(missing)
-        print(
-            f"Error: --from-stage {from_stage} requires these cached files "
-            f"from a prior run with --keep-work:\n  {files}",
-            file=sys.stderr,
+        logger.error(
+            "--from-stage %s requires these cached files from a prior run "
+            "with --keep-work:\n  %s",
+            from_stage, files,
         )
         sys.exit(2)
 
@@ -233,9 +234,9 @@ def run(args) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"\nDXF Pipeline -- {args.dxf.name} -> {out_dir}/")
+    logger.info("DXF Pipeline -- %s -> %s/", args.dxf.name, out_dir)
     if args.themes_config:
-        print(f"Themes config: {args.themes_config}")
+        logger.info("Themes config: %s", args.themes_config)
 
     total = len(STAGES)
     failed = False
@@ -249,12 +250,11 @@ def run(args) -> int:
             ok = _run_cmd(cmd, stage_label)
             elapsed = time.monotonic() - t0
             if not ok:
-                print(f"[Stage {stage_num}/{total}] {stage_label:<20}  FAILED")
-                print(f"Pipeline aborted. Intermediates retained in {work_dir}",
-                      file=sys.stderr)
+                logger.error("[Stage %d/%d] %-20s  FAILED", stage_num, total, stage_label)
+                logger.error("Pipeline aborted. Intermediates retained in %s", work_dir)
                 failed = True
                 break
-            print(f"[Stage {stage_num}/{total}] {stage_label:<20}  OK  {elapsed:.1f}s")
+            logger.info("[Stage %d/%d] %-20s  OK  %.1fs", stage_num, total, stage_label, elapsed)
 
         elif stage_key == "tiles":
             # Read manifest produced by Stage 1
@@ -268,12 +268,11 @@ def run(args) -> int:
                 ok = _run_cmd(cmd, label)
                 elapsed = time.monotonic() - t0
                 if not ok:
-                    print(f"[Stage {stage_num}/{total}] {label:<28}  FAILED")
-                    print(f"Pipeline aborted. Intermediates retained in {work_dir}",
-                          file=sys.stderr)
+                    logger.error("[Stage %d/%d] %-28s  FAILED", stage_num, total, label)
+                    logger.error("Pipeline aborted. Intermediates retained in %s", work_dir)
                     theme_failed = True
                     break
-                print(f"[Stage {stage_num}/{total}] {label:<28}  OK  {elapsed:.1f}s")
+                logger.info("[Stage %d/%d] %-28s  OK  %.1fs", stage_num, total, label, elapsed)
             if theme_failed:
                 failed = True
                 break
@@ -289,15 +288,14 @@ def run(args) -> int:
             ok = _run_cmd(cmd, stage_label)
             elapsed = time.monotonic() - t0
             if not ok:
-                print(f"[Stage {stage_num}/{total}] {stage_label:<20}  FAILED")
-                print(f"Pipeline aborted. Intermediates retained in {work_dir}",
-                      file=sys.stderr)
+                logger.error("[Stage %d/%d] %-20s  FAILED", stage_num, total, stage_label)
+                logger.error("Pipeline aborted. Intermediates retained in %s", work_dir)
                 failed = True
                 break
-            print(f"[Stage {stage_num}/{total}] {stage_label:<20}  OK  {elapsed:.1f}s")
+            logger.info("[Stage %d/%d] %-20s  OK  %.1fs", stage_num, total, stage_label, elapsed)
 
     if not failed:
-        print(f"\nDone. Outputs in {out_dir}/")
+        logger.info("Done. Outputs in %s/", out_dir)
         if not args.keep_work and work_dir.exists():
             shutil.rmtree(work_dir)
 
@@ -306,4 +304,8 @@ def run(args) -> int:
 
 if __name__ == "__main__":
     args = parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(message)s",
+    )
     sys.exit(run(args))

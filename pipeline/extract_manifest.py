@@ -33,12 +33,15 @@ Requirements:
 
 import argparse
 import json
+import logging
 import math
 import os
 import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────
@@ -954,14 +957,15 @@ def build_manifest(
     cluster_gap:    float = _DEFAULT_CLUSTER_GAP,
     h_tolerance:    float = _DEFAULT_H_TOLERANCE,
 ) -> dict:
-    print(f"[1/3] Reading DXF: {dxf_path}")
+    logger.info("[1/3] Reading DXF: %s", dxf_path)
     dxf_entities = extract_dxf_text_entities(dxf_path)
-    print(f"      → {len(dxf_entities)} text entities found")
+    logger.info("      %d text entities found", len(dxf_entities))
 
-    print(f"[2/3] Matching {len(target_labels)} labels...")
+    logger.info("[2/3] Matching %d labels...", len(target_labels))
     dxf_index     = build_text_index(dxf_entities)
     cluster_index = build_cluster_index(dxf_entities, gap_factor=cluster_gap, h_tolerance=h_tolerance)
-    print(f"      -> {len(cluster_index)} cluster variants indexed  (gap={cluster_gap}x h_tol={h_tolerance}x h)")
+    logger.debug("      %d cluster variants indexed  (gap=%sx h_tol=%sx h)",
+                 len(cluster_index), cluster_gap, h_tolerance)
     labels        = match_labels(target_labels, dxf_index, cluster_index,
                                  layer_priority, transform)
 
@@ -998,10 +1002,10 @@ def build_manifest(
         },
     }
 
-    print(f"[3/3] Done.")
-    print(f"      found={found}  not_found={not_found}  duplicates={duplicates}"
-          f"  fuzzy={fuzzy}  clustered={clustered}  coords={has_coords}"
-          f"  leaflet={has_leaflet}  bbox={has_bbox}")
+    logger.info("[3/3] Done. found=%d  not_found=%d  duplicates=%d  "
+                "fuzzy=%d  clustered=%d  coords=%d  leaflet=%d  bbox=%d",
+                found, not_found, duplicates, fuzzy, clustered,
+                has_coords, has_leaflet, has_bbox)
 
     return manifest
 
@@ -1050,6 +1054,10 @@ def load_labels_from_file(path: str) -> list[str]:
 
 def main():
     args = parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-8s %(message)s",
+    )
 
     target_labels = (load_labels_from_file(args.labels)
                      if args.labels else args.labels_inline)
@@ -1061,21 +1069,22 @@ def main():
             seen.add(l)
             unique.append(l)
     if len(unique) < len(target_labels):
-        print(f"Warning: removed {len(target_labels) - len(unique)} duplicate labels")
+        logger.warning("Removed %d duplicate labels", len(target_labels) - len(unique))
 
     # Load transform from tile_meta + DXF extents
     transform = None
     if args.tile_meta:
         dxf_extents = extract_dxf_extents(args.dxf)
         if dxf_extents is None:
-            sys.exit("ERROR: Could not determine DXF extents from DXF file")
+            logger.error("Could not determine DXF extents from DXF file")
+            sys.exit(1)
         with open(args.tile_meta, "r", encoding="utf-8") as f:
             tm = json.load(f)
         transform = CoordTransform.from_tile_meta(dxf_extents, tm)
-        print(f"Tile meta loaded: {args.tile_meta}  "
-              f"({transform.png_w}×{transform.png_h}px  scale_x={transform.scale_x:.4f})")
+        logger.info("Tile meta loaded: %s  (%dx%dpx  scale_x=%.4f)",
+                    args.tile_meta, transform.png_w, transform.png_h, transform.scale_x)
     else:
-        print("No --tile-meta provided — Leaflet coords will be null")
+        logger.warning("No --tile-meta provided — Leaflet coords will be null")
 
     manifest = build_manifest(
         dxf_path=args.dxf,
@@ -1091,7 +1100,7 @@ def main():
     hitboxes_path.parent.mkdir(parents=True, exist_ok=True)
     with open(hitboxes_path, "w", encoding="utf-8") as f:
         json.dump(manifest["hitboxes"], f, indent=2, ensure_ascii=False)
-    print(f"\nHitboxes written : {hitboxes_path}")
+    logger.info("Hitboxes written : %s", hitboxes_path)
 
     # Write manifest (opt-in)
     if args.manifest:
@@ -1099,14 +1108,14 @@ def main():
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
         with open(manifest_path, "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
-        print(f"Manifest written : {manifest_path}")
+        logger.info("Manifest written : %s", manifest_path)
 
     # Unmatched labels
     missing = [k for k, v in manifest["labels"].items() if not v["found"]]
     if missing:
-        print(f"\n⚠  Unmatched labels ({len(missing)}):")
+        logger.warning("Unmatched labels (%d):", len(missing))
         for label in missing:
-            print(f"   - {label}")
+            logger.warning("  - %s", label)
 
 
 if __name__ == "__main__":
