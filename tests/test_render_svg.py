@@ -1,34 +1,34 @@
 """
 Unit and integration tests for render_svg.py (Stage 1).
-
-render_svg.py has module-level side effects (arg parsing + DXF reading),
-so ALL tests invoke it as a subprocess rather than importing it.
 """
-import os
-import re
-import subprocess
+import io
 import sys
+import re
+import json
+from contextlib import redirect_stderr
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 PIPELINE_DIR = Path(__file__).parent.parent / "pipeline"
-RENDER_SVG   = PIPELINE_DIR / "render_svg.py"
 
-# render_svg.py prints box-drawing Unicode chars (─) which fail on Windows
-# cp1252 console without an explicit UTF-8 override.
-_SUBPROCESS_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+# Ensure pipeline/ is importable
+if str(PIPELINE_DIR) not in sys.path:
+    sys.path.insert(0, str(PIPELINE_DIR))
 
 
-def _run_render(args: list, **kwargs):
-    """Helper: run render_svg.py as a subprocess, return CompletedProcess."""
-    kwargs.setdefault("env", _SUBPROCESS_ENV)
-    return subprocess.run(
-        [sys.executable, str(RENDER_SVG)] + args,
-        capture_output=True,
-        text=True,
-        **kwargs,
-    )
+def _call_render(args: list) -> SimpleNamespace:
+    """Call render_svg.main(args) directly; return object with .returncode and .stderr."""
+    import render_svg  # noqa: PLC0415
+    buf = io.StringIO()
+    try:
+        with redirect_stderr(buf):
+            render_svg.main(args)
+        return SimpleNamespace(returncode=0, stderr=buf.getvalue())
+    except SystemExit as exc:
+        return SimpleNamespace(returncode=exc.code if exc.code is not None else 1,
+                               stderr=buf.getvalue())
 
 
 def _read_viewbox(svg_path: Path) -> tuple[float, float] | None:
@@ -68,18 +68,18 @@ def _make_dxf_with_entities(tmp_path: Path, entities: list[dict]) -> Path:
 class TestRenderSvgBasic:
     def test_svg_file_created(self, tmp_path, minimal_dxf):
         svg_out = tmp_path / "out.svg"
-        result  = _run_render([str(minimal_dxf), str(svg_out)])
+        result  = _call_render([str(minimal_dxf), str(svg_out)])
         assert result.returncode == 0, result.stderr
         assert svg_out.exists()
 
     def test_svg_is_non_empty(self, tmp_path, minimal_dxf):
         svg_out = tmp_path / "out.svg"
-        _run_render([str(minimal_dxf), str(svg_out)])
+        _call_render([str(minimal_dxf), str(svg_out)])
         assert svg_out.stat().st_size > 0
 
     def test_viewbox_reflects_entity_extents(self, tmp_path, minimal_dxf):
         svg_out = tmp_path / "out.svg"
-        result  = _run_render([str(minimal_dxf), str(svg_out)])
+        result  = _call_render([str(minimal_dxf), str(svg_out)])
         assert result.returncode == 0, result.stderr
 
         vb = _read_viewbox(svg_out)
@@ -93,14 +93,14 @@ class TestRenderSvgBasic:
 
     def test_svg_contains_geometry(self, tmp_path, minimal_dxf):
         svg_out = tmp_path / "out.svg"
-        _run_render([str(minimal_dxf), str(svg_out)])
+        _call_render([str(minimal_dxf), str(svg_out)])
         content = svg_out.read_text(encoding="utf-8")
         # SVG should contain at least some elements beyond the root tag
         assert "<path" in content or "<rect" in content or "<polyline" in content or "<line" in content
 
     def test_default_output_filename(self, tmp_path, minimal_dxf):
         # When no output path is given, SVG is written next to the DXF
-        result = _run_render([str(minimal_dxf)], cwd=str(tmp_path))
+        result = _call_render([str(minimal_dxf)])
         assert result.returncode == 0, result.stderr
         expected_svg = minimal_dxf.with_suffix(".svg")
         assert expected_svg.exists()
@@ -113,7 +113,7 @@ class TestRenderSvgBasic:
 class TestTextToPath:
     def test_without_flag_has_text_or_path_elements(self, tmp_path, minimal_dxf):
         svg_out = tmp_path / "out.svg"
-        result  = _run_render([str(minimal_dxf), str(svg_out)])
+        result  = _call_render([str(minimal_dxf), str(svg_out)])
         assert result.returncode == 0, result.stderr
         content = svg_out.read_text(encoding="utf-8")
         # At minimum the SVG should contain some content derived from the DXF
@@ -122,12 +122,12 @@ class TestTextToPath:
     def test_with_flag_exits_zero(self, tmp_path, minimal_dxf):
         # --text-to-path should either succeed or gracefully fall back
         svg_out = tmp_path / "out.svg"
-        result  = _run_render([str(minimal_dxf), str(svg_out), "--text-to-path"])
+        result  = _call_render([str(minimal_dxf), str(svg_out), "--text-to-path"])
         assert result.returncode == 0, result.stderr
 
     def test_with_flag_svg_produced(self, tmp_path, minimal_dxf):
         svg_out = tmp_path / "out.svg"
-        _run_render([str(minimal_dxf), str(svg_out), "--text-to-path"])
+        _call_render([str(minimal_dxf), str(svg_out), "--text-to-path"])
         assert svg_out.exists()
         assert svg_out.stat().st_size > 0
 
@@ -146,7 +146,7 @@ class TestDegenerateInputs:
         doc.saveas(str(dxf_path))
 
         svg_out = tmp_path / "out.svg"
-        result  = _run_render([str(dxf_path), str(svg_out)])
+        result  = _call_render([str(dxf_path), str(svg_out)])
         assert result.returncode != 0
 
     def test_single_entity_drawing_succeeds(self, tmp_path):
@@ -155,14 +155,14 @@ class TestDegenerateInputs:
             [{"type": "text", "text": "FV101", "insert": (10.0, 20.0)}],
         )
         svg_out = tmp_path / "out.svg"
-        result  = _run_render([str(dxf_path), str(svg_out)])
+        result  = _call_render([str(dxf_path), str(svg_out)])
         assert result.returncode == 0, result.stderr
         assert svg_out.exists()
 
     def test_missing_dxf_exits_nonzero(self, tmp_path):
         nonexistent = tmp_path / "does_not_exist.dxf"
         svg_out     = tmp_path / "out.svg"
-        result      = _run_render([str(nonexistent), str(svg_out)])
+        result      = _call_render([str(nonexistent), str(svg_out)])
         assert result.returncode != 0
 
     def test_geometry_only_no_text_succeeds(self, tmp_path):
@@ -171,7 +171,7 @@ class TestDegenerateInputs:
             [{"type": "lwpolyline", "points": [(0, 0), (10, 0), (10, 10), (0, 10)]}],
         )
         svg_out = tmp_path / "out.svg"
-        result  = _run_render([str(dxf_path), str(svg_out)])
+        result  = _call_render([str(dxf_path), str(svg_out)])
         assert result.returncode == 0, result.stderr
         assert svg_out.exists()
 
@@ -191,7 +191,7 @@ class TestThemesConfig:
         themes = {"dark": {"background": "#1a1a2e", "layers": {}}}
         cfg = self._make_themes_file(tmp_path, themes)
         svg_base = tmp_path / "out.svg"
-        result = _run_render([str(minimal_dxf), str(svg_base),
+        result = _call_render([str(minimal_dxf), str(svg_base),
                               "--themes-config", str(cfg)])
         assert result.returncode == 0, result.stderr
         assert (tmp_path / "out_dark.svg").exists()
@@ -199,16 +199,19 @@ class TestThemesConfig:
 
     def test_two_themes_produce_two_svgs(self, tmp_path, minimal_dxf):
         themes = {
+            "_comment": "ignored metadata key",
             "light": {"background": "#ffffff", "layers": {}},
             "dark":  {"background": "#1a1a2e", "layers": {}},
         }
         cfg = self._make_themes_file(tmp_path, themes)
         svg_base = tmp_path / "drawing.svg"
-        result = _run_render([str(minimal_dxf), str(svg_base),
+        result = _call_render([str(minimal_dxf), str(svg_base),
                               "--themes-config", str(cfg)])
         assert result.returncode == 0, result.stderr
+        # _comment key is skipped; only light and dark are rendered
         assert (tmp_path / "drawing_light.svg").exists()
         assert (tmp_path / "drawing_dark.svg").exists()
+        assert not (tmp_path / "drawing__comment.svg").exists()
 
     def test_manifest_written_with_themes(self, tmp_path, minimal_dxf):
         import json
@@ -218,7 +221,7 @@ class TestThemesConfig:
         }
         cfg = self._make_themes_file(tmp_path, themes)
         svg_base = tmp_path / "drawing.svg"
-        result = _run_render([str(minimal_dxf), str(svg_base),
+        result = _call_render([str(minimal_dxf), str(svg_base),
                               "--themes-config", str(cfg)])
         assert result.returncode == 0, result.stderr
 
@@ -233,7 +236,7 @@ class TestThemesConfig:
         """Default run (no --themes-config) still writes svg_manifest.json."""
         import json
         svg_out = tmp_path / "out.svg"
-        result = _run_render([str(minimal_dxf), str(svg_out)])
+        result = _call_render([str(minimal_dxf), str(svg_out)])
         assert result.returncode == 0, result.stderr
 
         manifest_path = tmp_path / "svg_manifest.json"
@@ -241,14 +244,14 @@ class TestThemesConfig:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         assert len(manifest) == 1
         assert manifest[0]["theme"] is None
-        assert manifest[0]["svg"] == str(svg_out)
+        assert manifest[0]["svg"] == str(svg_out.resolve())
 
     def test_manifest_background_matches_config(self, tmp_path, minimal_dxf):
         import json
         themes = {"dark": {"background": "#1a1a2e", "layers": {}}}
         cfg = self._make_themes_file(tmp_path, themes)
         svg_base = tmp_path / "drawing.svg"
-        _run_render([str(minimal_dxf), str(svg_base), "--themes-config", str(cfg)])
+        _call_render([str(minimal_dxf), str(svg_base), "--themes-config", str(cfg)])
 
         manifest = json.loads(
             (tmp_path / "svg_manifest.json").read_text(encoding="utf-8")
@@ -260,7 +263,7 @@ class TestThemesConfig:
         themes = {"dark": {"background": "#1a1a2e", "layers": {"NONEXISTENT": "#ffffff"}}}
         cfg = self._make_themes_file(tmp_path, themes)
         svg_base = tmp_path / "out.svg"
-        result = _run_render([str(minimal_dxf), str(svg_base),
+        result = _call_render([str(minimal_dxf), str(svg_base),
                               "--themes-config", str(cfg)])
         assert result.returncode == 0, result.stderr
         assert "WARNING" in result.stderr
@@ -272,7 +275,7 @@ class TestThemesConfig:
         themes = {"light": {"background": "#ffffff", "layers": {"TAGS": "#0000ff"}}}
         cfg = self._make_themes_file(tmp_path, themes)
         svg_base = tmp_path / "drawing.svg"
-        result = _run_render([str(minimal_dxf), str(svg_base),
+        result = _call_render([str(minimal_dxf), str(svg_base),
                               "--themes-config", str(cfg)])
         assert result.returncode == 0, result.stderr
         svg_out = tmp_path / "drawing_light.svg"

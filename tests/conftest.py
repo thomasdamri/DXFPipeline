@@ -26,6 +26,11 @@ def minimal_dxf(tmp_path):
     doc = ezdxf.new(dxfversion="R2010")
     msp = doc.modelspace()
 
+    # Explicitly register layers in the layer table so has_entry() finds them
+    doc.layers.new("TAGS")
+    doc.layers.new("EQUIP")
+    doc.layers.new("OUTLINE")
+
     msp.add_text(
         "FV101",
         dxfattribs={
